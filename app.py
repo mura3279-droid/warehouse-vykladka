@@ -1,127 +1,145 @@
 import streamlit as st
 import pandas as pd
 from pathlib import Path
-from io import BytesIO
 
-st.set_page_config(page_title="Мезонин — выкладка", page_icon="📦", layout="wide")
-st.title("📦 Мезонин — выкладка")
-st.caption("Поиск товаров, адресное размещение и контроль выполнения выкладки.")
+st.set_page_config(page_title="Мезонин — выкладка", page_icon="📦", layout="centered",
+                   initial_sidebar_state="collapsed")
 
-DEFAULT_FILE = "1 этаж адрес(1).xlsx"
+st.markdown("""
+<style>
+.block-container {padding-top: 1rem; padding-bottom: 5rem; max-width: 850px;}
+[data-testid="stSidebar"] {min-width: 280px;}
+div[data-testid="stMetric"] {background: #f5f7f9; padding: 10px 12px; border-radius: 12px;}
+.product-card {border: 1px solid #e5e7eb; border-radius: 14px; padding: 13px 14px; margin: 9px 0; background: white;}
+.product-name {font-size: 1.02rem; font-weight: 650; line-height: 1.35; margin-bottom: 8px;}
+.product-address {font-size: 1.05rem; font-weight: 700; color: #087f5b; margin: 7px 0;}
+.product-meta {font-size: .86rem; color: #626b75; line-height: 1.55;}
+div.stButton > button, div.stDownloadButton > button {width:100%; min-height:44px; border-radius:10px;}
+div[data-testid="stSelectbox"] label, div[data-testid="stTextInput"] label {font-weight:600;}
+@media (max-width: 640px) {
+ .block-container {padding-left: .8rem; padding-right: .8rem; padding-top: .7rem;}
+ h1 {font-size: 1.55rem !important;}
+ h2 {font-size: 1.25rem !important;}
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.title("📦 Мезонин")
+st.caption("Мобильная выкладка по товарным группам и адресам")
 
 @st.cache_data
-def load_excel(file):
+def read_excel(file):
     df = pd.read_excel(file, dtype=str)
     df.columns = [str(c).strip() for c in df.columns]
-    # Remove completely empty columns
-    df = df.loc[:, ~df.isna().all()]
-    df = df.fillna("")
+    df = df.loc[:, ~df.isna().all()].fillna("")
+    for c in df.columns:
+        df[c] = df[c].astype(str).replace("nan", "").str.strip()
     return df
 
-uploaded = st.sidebar.file_uploader("Загрузить Excel-базу", type=["xlsx", "xls"])
+DEFAULT_FILE = "1 этаж адрес(1).xlsx"
+uploaded = st.file_uploader("Загрузить Excel-базу", type=["xlsx"])
 if uploaded:
-    data = load_excel(uploaded)
+    df = read_excel(uploaded)
 elif Path(DEFAULT_FILE).exists():
-    data = load_excel(DEFAULT_FILE)
+    df = read_excel(DEFAULT_FILE)
 else:
-    st.info("Загрузите Excel-файл с товарами через левую панель.")
+    st.info("Загрузите Excel-файл с товарами.")
     st.stop()
 
-required = ["Код SKU", "Штрих Код", "Наименование SKU", "Единица измерения",
-            "Доступный остаток", "Группа", "Подгруппа", "Торговая марка", "Адрес"]
-missing = [c for c in required if c not in data.columns]
+required = ["Код SKU","Штрих Код","Наименование SKU","Единица измерения",
+            "Доступный остаток","Группа","Подгруппа","Торговая марка","Адрес"]
+missing = [x for x in required if x not in df.columns]
 if missing:
-    st.warning("Не найдены ожидаемые колонки: " + ", ".join(missing) +
-               ". Проверьте заголовки Excel или загрузите корректную таблицу.")
+    st.warning("Не найдены колонки: " + ", ".join(missing))
 
-# normalize text for filter and display
-for col in data.columns:
-    data[col] = data[col].astype(str).replace("nan", "").str.strip()
+def val(row, col):
+    return str(row.get(col, "")).strip()
 
-# Working state is kept in this browser session; export allows saving progress
+def row_key(row):
+    return val(row,"Код SKU") + "|" + val(row,"Адрес")
+
 if "done_keys" not in st.session_state:
     st.session_state.done_keys = set()
 
-def key_for(row):
-    return str(row.get("Код SKU", "")) + "|" + str(row.get("Адрес", ""))
+with st.expander("🔎 Поиск и фильтры", expanded=True):
+    query = st.text_input("Поиск по SKU, штрихкоду или названию", placeholder="Например: 201964 или сушки")
+    group_values = sorted(x for x in df.get("Группа", pd.Series(dtype=str)).unique() if x)
+    group = st.selectbox("Товарная группа", ["Все группы"] + group_values)
+    f = df.copy()
+    if group != "Все группы" and "Группа" in f:
+        f = f[f["Группа"] == group]
+    sub_values = sorted(x for x in f.get("Подгруппа", pd.Series(dtype=str)).unique() if x)
+    sub = st.selectbox("Подгруппа", ["Все подгруппы"] + sub_values)
+    if sub != "Все подгруппы" and "Подгруппа" in f:
+        f = f[f["Подгруппа"] == sub]
+    if query:
+        searchable = [c for c in ["Код SKU","Штрих Код","Наименование SKU","Торговая марка","Адрес"] if c in f]
+        mask = f[searchable].apply(lambda s: s.str.contains(query, case=False, na=False)).any(axis=1)
+        f = f[mask]
 
-data["Статус"] = data.apply(lambda r: "✅ Выполнено" if key_for(r) in st.session_state.done_keys else "⬜ Не выполнено", axis=1)
-
-st.sidebar.header("Фильтры")
-search = st.sidebar.text_input("Поиск: SKU / штрихкод / название")
-group_col = "Группа" if "Группа" in data.columns else None
-sub_col = "Подгруппа" if "Подгруппа" in data.columns else None
-address_col = "Адрес" if "Адрес" in data.columns else None
-
-filtered = data.copy()
-if group_col:
-    groups = sorted([x for x in filtered[group_col].unique() if x])
-    selected_group = st.sidebar.selectbox("Товарная группа", ["Все группы"] + groups)
-    if selected_group != "Все группы":
-        filtered = filtered[filtered[group_col] == selected_group]
-if sub_col:
-    subs = sorted([x for x in filtered[sub_col].unique() if x])
-    selected_sub = st.sidebar.selectbox("Подгруппа", ["Все подгруппы"] + subs)
-    if selected_sub != "Все подгруппы":
-        filtered = filtered[filtered[sub_col] == selected_sub]
-if address_col:
-    addresses = sorted([x for x in filtered[address_col].unique() if x])
-    selected_address = st.sidebar.selectbox("Адрес", ["Все адреса"] + addresses)
-    if selected_address != "Все адреса":
-        filtered = filtered[filtered[address_col] == selected_address]
-if search:
-    fields = [c for c in ["Код SKU", "Штрих Код", "Наименование SKU", "Торговая марка", "Адрес"] if c in filtered.columns]
-    mask = filtered[fields].astype(str).apply(lambda col: col.str.contains(search, case=False, na=False)).any(axis=1)
-    filtered = filtered[mask]
-
-st.subheader("Товары для выкладки")
-total = len(filtered)
-completed = sum(key_for(r) in st.session_state.done_keys for _, r in filtered.iterrows())
-c1,c2,c3 = st.columns(3)
-c1.metric("Товарных строк", total)
-c2.metric("Выполнено", completed)
-c3.metric("Осталось", total-completed)
+total = len(f)
+completed = sum(row_key(r) in st.session_state.done_keys for _,r in f.iterrows())
+m1,m2,m3 = st.columns(3)
+m1.metric("Всего", total)
+m2.metric("Готово", completed)
+m3.metric("Осталось", total-completed)
 if total:
-    st.progress(completed/total)
+    st.progress(completed/total, text=f"Выполнено {completed} из {total}")
 
-columns_to_show = [c for c in required if c in filtered.columns]
-view = filtered[columns_to_show + ["Статус"]].copy() if columns_to_show else filtered.copy()
-st.dataframe(view, use_container_width=True, hide_index=True)
+st.subheader("Товары")
+page_size = 20
+pages = max(1, (total + page_size - 1)//page_size)
+if "page" not in st.session_state: st.session_state.page = 1
+st.session_state.page = min(st.session_state.page, pages)
+p1,p2 = st.columns([1,1])
+with p1:
+    if st.button("← Назад", disabled=st.session_state.page <= 1):
+        st.session_state.page -= 1
+        st.rerun()
+with p2:
+    if st.button("Далее →", disabled=st.session_state.page >= pages):
+        st.session_state.page += 1
+        st.rerun()
+st.caption(f"Страница {st.session_state.page} из {pages} · показано до {page_size} товаров")
 
-st.markdown("---")
-st.subheader("Отметить выкладку")
-if total:
-    options = filtered.apply(lambda r: f'{r.get("Код SKU","")} | {r.get("Наименование SKU","")} | {r.get("Адрес","")}', axis=1).tolist()
-    selected = st.selectbox("Выберите товар/адрес", options)
-    idx = options.index(selected)
-    row = filtered.iloc[idx]
-    row_key = key_for(row)
-    is_done = row_key in st.session_state.done_keys
-    st.write(f"**SKU:** {row.get('Код SKU','')}  ·  **Адрес:** {row.get('Адрес','')}")
-    if is_done:
-        if st.button("Снять отметку «Выполнено»"):
-            st.session_state.done_keys.discard(row_key)
-            st.rerun()
-    else:
-        if st.button("✅ Отметить как выполнено", type="primary"):
-            st.session_state.done_keys.add(row_key)
-            st.rerun()
+start=(st.session_state.page-1)*page_size
+page_df=f.iloc[start:start+page_size]
+if page_df.empty:
+    st.info("По выбранным условиям товары не найдены.")
 else:
-    st.info("По выбранным фильтрам товары не найдены.")
+    for i, (_, r) in enumerate(page_df.iterrows()):
+        done = row_key(r) in st.session_state.done_keys
+        name = val(r,"Наименование SKU") or "Без наименования"
+        address = val(r,"Адрес") or "Адрес не указан"
+        status = "✅ Выполнено" if done else "⬜ Не выполнено"
+        st.markdown(f"""
+        <div class="product-card">
+          <div class="product-name">{name}</div>
+          <div class="product-address">📍 {address}</div>
+          <div class="product-meta">
+            SKU: {val(r,'Код SKU')}<br>
+            Штрихкод: {val(r,'Штрих Код')}<br>
+            Остаток: {val(r,'Доступный остаток')} {val(r,'Единица измерения')}<br>
+            Группа: {val(r,'Группа')}<br>
+            Подгруппа: {val(r,'Подгруппа')}<br>
+            Статус: {status}
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+        if done:
+            if st.button("↩ Снять отметку", key=f"undo_{start+i}_{row_key(r)}"):
+                st.session_state.done_keys.discard(row_key(r))
+                st.rerun()
+        else:
+            if st.button("✓ Отметить как выполнено", key=f"done_{start+i}_{row_key(r)}", type="primary"):
+                st.session_state.done_keys.add(row_key(r))
+                st.rerun()
 
-# Export all current completion records
-status_export = data[["Код SKU","Наименование SKU","Адрес"]].copy() if all(c in data.columns for c in ["Код SKU","Наименование SKU","Адрес"]) else data.copy()
-status_export["Статус"] = status_export.apply(lambda r: "Выполнено" if key_for(r) in st.session_state.done_keys else "Не выполнено", axis=1)
-csv_bytes = status_export.to_csv(index=False, sep=";", encoding="utf-8-sig").encode("utf-8-sig")
-st.download_button("⬇️ Скачать отчёт по выполнению (CSV)", data=csv_bytes, file_name="отчет_выкладка.csv", mime="text/csv")
-
-with st.expander("Как пользоваться"):
-    st.markdown("""
-    1. Загрузите Excel-файл через боковую панель (или положите его рядом с `app.py` под именем `1 этаж адрес(1).xlsx`).
-    2. Выберите группу, подгруппу и/или адрес.
-    3. Найдите товар по SKU, штрихкоду или названию.
-    4. Отметьте выполненную выкладку.
-    5. Скачайте CSV-отчёт для сохранения отметок.
-
-    **Важно:** текущая версия сохраняет отметки только в активной сессии браузера. Для общей работы нескольких сотрудников с постоянным сохранением потребуется подключить базу данных/SharePoint.
-    """)
+st.divider()
+export_cols=[c for c in ["Код SKU","Штрих Код","Наименование SKU","Группа","Подгруппа","Адрес"] if c in df]
+report=df[export_cols].copy()
+report["Статус"]=report.apply(lambda r:"Выполнено" if row_key(r) in st.session_state.done_keys else "Не выполнено",axis=1)
+st.download_button("⬇️ Скачать отчёт по выкладке", report.to_csv(index=False,sep=";",encoding="utf-8-sig").encode("utf-8-sig"),
+                   "otchet_vykladka.csv","text/csv")
+with st.expander("ℹ️ Важно о сохранении"):
+    st.write("В этой версии отметки сохраняются только в текущей сессии браузера. Для общей работы сотрудников и постоянного хранения подключим общую базу данных.")
