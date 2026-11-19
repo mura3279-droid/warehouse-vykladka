@@ -191,19 +191,19 @@ for r in view.head(120).itertuples():
     with st.container(border=True):
         left,right=st.columns([1,3])
         with left:
-            sku_photo=re.sub(r"\\.0$","",str(r.sku).strip())
+            sku_photo=re.sub(r"\.0$","",str(r.sku).strip())
             if sku_photo and re.fullmatch(r"[0-9A-Za-z_-]+",sku_photo):
                 photo_url=f"https://s3-pic.e-magnum.kz/item/{sku_photo}.jpg"
-                # Direct browser image, not the Streamlit image proxy.
+                # Browser loads image directly. Streamlit's server-side image fetch is avoided.
                 st.markdown(
-                    f'<div style="width:100%;min-height:115px;text-align:center">'
-                    f'<img src="{html.escape(photo_url,quote=True)}" loading="eager" '
-                    f'style="display:block;width:100%;max-width:190px;max-height:180px;object-fit:contain;margin:auto" '
-                    f'<div style="display:none;color:#64748b;font-size:12px;padding:12px 0">Фото не загрузилось</div>'
+                    f'<div style="min-height:105px;text-align:center">'
+                    f'<img src="{html.escape(photo_url,quote=True)}" loading="eager" referrerpolicy="no-referrer" '
+                    f'style="width:100%;max-width:160px;max-height:165px;object-fit:contain" '
+                    f'onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'">'
+                    f'<div style="display:none;color:#64748b;font-size:12px;padding:24px 0">Фото отсутствует</div>'
                     f'</div>',unsafe_allow_html=True)
                 st.markdown(f"[Открыть фото ↗]({photo_url})")
-            else:
-                st.caption("Нет кода товара для фото")
+            else:st.caption("Фото отсутствует")
         with right:
             st.markdown(f"**{r.name}**")
             st.caption(f"Код: {r.sku} · ШК: {r.barcode} · Адрес: {r.address}")
